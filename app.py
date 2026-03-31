@@ -11,7 +11,7 @@ st.markdown("""
 * ✔️ 自动保留共有的数据，并同步历史信息。
 * ✔️ 自动增加最新表中的新增物料。
 * ✔️ 自动剔除已不在最新表中的物料。
-* 🤖 **智能防错**：自动跳过大标题、清理隐形空格、自动调整完美列宽。
+* 🤖 **智能防错**：跳过大标题、清理隐形空格、自动完美列宽、**自动去除多余的00:00:00时间尾巴**。
 """)
 
 # 1. 文件上传
@@ -71,7 +71,6 @@ if old_file and new_file:
                 df_old['物料编码'] = df_old['物料编码'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True).replace('nan', '').str.strip()
                 df_new['批次'] = df_new['批次'].fillna('').astype(str).replace('nan', '').str.strip()
                 df_old['批次'] = df_old['批次'].fillna('').astype(str).replace('nan', '').str.strip()
-                # -----------------------------------------------
 
                 # 5. 提取历史信息
                 history_cols = ['物料编码', '批次', '采购订单', '入库时间', '供应商', '存放位置', '备注']
@@ -93,6 +92,15 @@ if old_file and new_file:
                         
                 df_merged = df_merged[final_columns]
                 df_merged['序号'] = range(1, len(df_merged) + 1)
+                
+                # --- 新增：彻底消灭时间尾巴 00:00:00 ---
+                if '入库时间' in df_merged.columns:
+                    # 先转为纯文本，然后用正则替换掉所有 00:00:00 及其前面的空格
+                    df_merged['入库时间'] = df_merged['入库时间'].astype(str)
+                    df_merged['入库时间'] = df_merged['入库时间'].str.replace(r'\s*00:00:00$', '', regex=True)
+                    # 将空值（nan/None/NaT）替换为空白
+                    df_merged['入库时间'] = df_merged['入库时间'].replace(['nan', 'None', 'NaT'], '')
+                # ------------------------------------
 
                 st.success("✅ 数据整合成功！")
                 st.dataframe(df_merged.head(10))
@@ -107,17 +115,13 @@ if old_file and new_file:
                     
                     # 遍历所有列，动态设置列宽
                     for i, col in enumerate(df_merged.columns):
-                        # 把空值替换成空字符串来计算真实长度
                         col_data = df_merged[col].astype(str).replace('nan', '').replace('None', '')
                         max_len = max(col_data.map(len).max(), len(str(col)))
                         
-                        # 重点修复：为长内容留足空间
                         if col in ['物料描述', '备注']:
-                            set_len = min(max_len * 1.5, 60) # 描述最多给 60 宽
-                        elif col == '入库时间':
-                            set_len = max(max_len + 4, 22) # 强行保底 22 宽度，足够放下时分秒
-                        elif col in ['物料编码', '批次']:
-                            set_len = max(max_len + 4, 18)
+                            set_len = min(max_len * 1.5, 60)
+                        elif col in ['物料编码', '批次', '入库时间']:
+                            set_len = max(max_len + 4, 15) # 时间修剪后，15的宽度绰绰有余
                         else:
                             set_len = max_len + 4
                             
