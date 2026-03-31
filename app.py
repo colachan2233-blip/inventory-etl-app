@@ -7,74 +7,87 @@ st.set_page_config(page_title="ERP 库存月报自动化整合工具", layout="w
 st.title("📦 ERP 库存月报自动化整合工具")
 st.markdown("""
 **功能说明：**
-以【本月(3月)报表】为基准，将【上月(2月)报表】中的历史信息（采购订单、入库时间、存放位置等）自动匹配合并。
-* ✔️ 自动保留共有的数据，并更新最新库存。
-* ✔️ 自动增加本月新增的物料。
-* ✔️ 自动剔除本月已不在库（上月有，本月无）的物料。
+以【最新报表】为基准，将【历史报表】中的附加信息（采购订单、入库时间、存放位置等）自动匹配合并。
+* ✔️ 自动保留共有的数据，并同步历史信息。
+* ✔️ 自动增加最新表中的新增物料。
+* ✔️ 自动剔除已不在最新表中的物料。
+* 🤖 **智能防错**：自动识别并跳过表格顶部的无效大标题。
 """)
 
-# 1. 文件上传
+# 1. 文件上传 (文案改为通用名称)
 col1, col2 = st.columns(2)
 with col1:
-    feb_file = st.file_uploader("上传上月（2月）ERP库存明细表", type=['xlsx', 'xls', 'csv'])
+    old_file = st.file_uploader("📂 上传【历史】库存表 (如上月)", type=['xlsx', 'xls', 'csv'])
 with col2:
-    mar_file = st.file_uploader("上传本月（3月）库存表", type=['xlsx', 'xls', 'csv'])
+    new_file = st.file_uploader("🆕 上传【最新】库存表 (如本月)", type=['xlsx', 'xls', 'csv'])
 
 
-# 辅助函数：读取文件
+# 辅助函数：读取文件并智能定位真实表头
 def load_data(file):
+    # 读取文件
     if file.name.endswith('.csv'):
-        # 尝试不同编码读取
         try:
-            return pd.read_csv(file, encoding='utf-8-sig')
+            df = pd.read_csv(file, encoding='utf-8-sig')
         except:
-            return pd.read_csv(file, encoding='gbk')
+            df = pd.read_csv(file, encoding='gbk')
     else:
-        return pd.read_excel(file)
+        df = pd.read_excel(file)
+
+    # 智能寻找真实表头：如果当前列名不对，往下找前5行，看哪一行包含'物料编码'或'物料'
+    if '物料编码' not in df.columns and '物料' not in df.columns:
+        for i in range(min(5, len(df))):
+            row_values = [str(val).strip() for val in df.iloc[i].values]
+            if '物料编码' in row_values or '物料' in row_values:
+                df.columns = row_values  # 把这一行设为表头
+                df = df.iloc[i + 1:].reset_index(drop=True)  # 删掉表头及以上的无效行
+                break
+
+    # 兜底清理：去除列名两端的空格，防止因为多敲了空格导致报错
+    df.columns = [str(col).strip() for col in df.columns]
+    return df
 
 
-if feb_file and mar_file:
+if old_file and new_file:
     if st.button("🚀 开始自动化整合", type="primary"):
         with st.spinner("正在处理数据，请稍候..."):
             try:
-                # 2. 读取数据
-                df_feb = load_data(feb_file)
-                df_mar = load_data(mar_file)
+                # 2. 读取数据 (变量名也改为 old 和 new)
+                df_old = load_data(old_file)
+                df_new = load_data(new_file)
 
                 # 3. 数据清洗：去除空行或底部“合计”之类的统计行
-                # 假设正常的物料编码都是数字或包含数字的有效字符串
-                df_feb = df_feb.dropna(subset=['物料编码'])
-                df_feb = df_feb[df_feb['物料编码'] != '合计']
+                df_old = df_old.dropna(subset=['物料编码'])
+                df_old = df_old[df_old['物料编码'].astype(str).str.strip() != '合计']
 
-                df_mar = df_mar.dropna(subset=['物料'])
+                df_new = df_new.dropna(subset=['物料'])
 
-                # 4. 统一字段名称 (将3月字段映射为2月的目标字段)
-                mar_rename_dict = {
+                # 4. 统一字段名称 (将新表字段映射为目标字段)
+                new_rename_dict = {
                     '物料': '物料编码',
                     '库存地点': '地点',
                     '基本计量单位': '单位',
                     '非限制使用的库存': '数量',
                     '值未限制': '库存金额'
                 }
-                df_mar = df_mar.rename(columns=mar_rename_dict)
+                df_new = df_new.rename(columns=new_rename_dict)
 
-                # 确保关键列是字符串格式，防止匹配失败
-                df_mar['物料编码'] = df_mar['物料编码'].astype(str).str.replace(r'\.0$', '', regex=True)
-                df_feb['物料编码'] = df_feb['物料编码'].astype(str).str.replace(r'\.0$', '', regex=True)
-                df_mar['批次'] = df_mar['批次'].astype(str)
-                df_feb['批次'] = df_feb['批次'].astype(str)
+                # 确保关键列是字符串格式，防止匹配失败 (去除浮点数末尾的 .0)
+                df_new['物料编码'] = df_new['物料编码'].astype(str).str.replace(r'\.0$', '', regex=True)
+                df_old['物料编码'] = df_old['物料编码'].astype(str).str.replace(r'\.0$', '', regex=True)
+                df_new['批次'] = df_new['批次'].astype(str)
+                df_old['批次'] = df_old['批次'].astype(str)
 
-                # 5. 提取2月报表中的历史信息字典 (去除重复项以防报错)
+                # 5. 提取历史报表中的历史信息字典 (去除重复项以防报错)
                 history_cols = ['物料编码', '批次', '采购订单', '入库时间', '供应商', '存放位置', '备注']
-                # 如果2月表里有些字段本身就不存在，则忽略
-                history_cols = [c for c in history_cols if c in df_feb.columns]
-                df_feb_history = df_feb[history_cols].drop_duplicates(subset=['物料编码', '批次'], keep='first')
+                # 如果旧表里有些字段本身就不存在，则忽略
+                history_cols = [c for c in history_cols if c in df_old.columns]
+                df_old_history = df_old[history_cols].drop_duplicates(subset=['物料编码', '批次'], keep='first')
 
                 # 6. 核心逻辑：左连接 (Left Join)
-                # 以3月为主表，去2月里找对应的 订单、入库时间、位置 等信息
-                df_merged = pd.merge(df_mar, df_feb_history, on=['物料编码', '批次'], how='left')
+                # 以新表为主表，去旧表里找对应的 订单、入库时间、位置 等信息
+                df_merged = pd.merge(df_new, df_old_history, on=['物料编码', '批次'], how='left')
 
-                # 7. 整理最终列的顺序，与2月报表一致
+                # 7. 整理最终列的顺序
                 final_columns = [
                     '序号', '工厂', '地点', '物料编码', '物料描述', '单位', '数量',
                     '库存金额', '批次', '采购订单', '入库时间', '供应商', '存放位置', '备注'
@@ -95,15 +108,19 @@ if feb_file and mar_file:
                 # 8. 页面预览
                 st.dataframe(df_merged.head(10))
 
-                # 9. 提供下载
+                # 9. 提供下载 (动态生成文件名)
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     df_merged.to_excel(writer, index=False, sheet_name='整合后库存明细')
 
+                # 提取用户上传的新表名字（去掉后缀）
+                original_name = new_file.name.rsplit('.', 1)[0]
+                download_file_name = f"整合后_{original_name}.xlsx"
+
                 st.download_button(
-                    label="⬇️ 下载整合后的 Excel 报表",
+                    label=f"⬇️ 下载 {download_file_name}",
                     data=output.getvalue(),
-                    file_name="整合后_3月ERP库存明细.xlsx",
+                    file_name=download_file_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
