@@ -11,7 +11,7 @@ st.markdown("""
 * ✔️ 自动保留共有的数据，并同步历史信息。
 * ✔️ 自动增加最新表中的新增物料。
 * ✔️ 自动剔除已不在最新表中的物料。
-* 🤖 **智能防错**：跳过大标题、清理隐形空格、自动完美列宽、**自动去除多余的00:00:00时间尾巴**。
+* 🤖 **智能防错**：清理隐形空格、自动完美列宽、**日期格式统一净化（严格保留原始精度，不擅自补齐）**。
 """)
 
 # 1. 文件上传
@@ -50,7 +50,7 @@ if old_file and new_file:
                 df_old = load_data(old_file)
                 df_new = load_data(new_file)
 
-                # 3. 数据清洗：去除空行或底部“合计”行
+                # 3. 数据清洗
                 df_old = df_old.dropna(subset=['物料编码'])
                 df_old = df_old[df_old['物料编码'].astype(str).str.strip() != '合计']
                 
@@ -66,7 +66,7 @@ if old_file and new_file:
                 }
                 df_new = df_new.rename(columns=new_rename_dict)
 
-                # --- 核心防御性加固：彻底清理 NaN 和隐形空格 ---
+                # 核心防御：清理 NaN 和隐形空格
                 df_new['物料编码'] = df_new['物料编码'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True).replace('nan', '').str.strip()
                 df_old['物料编码'] = df_old['物料编码'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True).replace('nan', '').str.strip()
                 df_new['批次'] = df_new['批次'].fillna('').astype(str).replace('nan', '').str.strip()
@@ -93,13 +93,35 @@ if old_file and new_file:
                 df_merged = df_merged[final_columns]
                 df_merged['序号'] = range(1, len(df_merged) + 1)
                 
-                # --- 新增：彻底消灭时间尾巴 00:00:00 ---
+                # --- 终极格式化：严格保真模式，只清洗外观，不捏造数据 ---
                 if '入库时间' in df_merged.columns:
-                    # 先转为纯文本，然后用正则替换掉所有 00:00:00 及其前面的空格
-                    df_merged['入库时间'] = df_merged['入库时间'].astype(str)
-                    df_merged['入库时间'] = df_merged['入库时间'].str.replace(r'\s*00:00:00$', '', regex=True)
-                    # 将空值（nan/None/NaT）替换为空白
-                    df_merged['入库时间'] = df_merged['入库时间'].replace(['nan', 'None', 'NaT'], '')
+                    def strictly_authentic_date(d):
+                        if pd.isna(d) or str(d).strip() in ['', 'nan', 'None', 'NaT']:
+                            return ''
+                            
+                        d_str = str(d).strip()
+                        # 砍掉系统自动产生的 00:00:00 时间尾巴
+                        d_str = d_str.split(' ')[0] 
+                        
+                        # 把汉字的年月日统一替换为 /
+                        d_str = d_str.replace('年', '/').replace('月', '/').replace('日', '')
+                        d_str = d_str.replace('-', '/')
+                        d_str = d_str.rstrip('/')
+                        
+                        # 统一补齐前导零 (如 2020/9 变成 2020/09)
+                        parts = d_str.split('/')
+                        try:
+                            if len(parts) == 3:
+                                return f"{parts[0]}/{int(parts[1]):02d}/{int(parts[2]):02d}"
+                            elif len(parts) == 2:
+                                return f"{parts[0]}/{int(parts[1]):02d}"
+                            else:
+                                return d_str
+                        except:
+                            # 遇到非日期文本，原样保留
+                            return str(d).strip()
+                            
+                    df_merged['入库时间'] = df_merged['入库时间'].apply(strictly_authentic_date)
                 # ------------------------------------
 
                 st.success("✅ 数据整合成功！")
@@ -113,7 +135,6 @@ if old_file and new_file:
                     workbook  = writer.book
                     worksheet = writer.sheets['整合后库存明细']
                     
-                    # 遍历所有列，动态设置列宽
                     for i, col in enumerate(df_merged.columns):
                         col_data = df_merged[col].astype(str).replace('nan', '').replace('None', '')
                         max_len = max(col_data.map(len).max(), len(str(col)))
@@ -121,7 +142,7 @@ if old_file and new_file:
                         if col in ['物料描述', '备注']:
                             set_len = min(max_len * 1.5, 60)
                         elif col in ['物料编码', '批次', '入库时间']:
-                            set_len = max(max_len + 4, 15) # 时间修剪后，15的宽度绰绰有余
+                            set_len = max(max_len + 4, 15)
                         else:
                             set_len = max_len + 4
                             
