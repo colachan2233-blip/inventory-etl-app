@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import re  # 新增：用于从文件名自动提取月份
 
 st.set_page_config(page_title="ERP 库存月报自动化整合工具", layout="wide")
 
@@ -11,7 +12,7 @@ st.markdown("""
 * ✔️ 自动保留共有的数据，并同步历史信息。
 * ✔️ 自动增加最新表中的新增物料。
 * ✔️ 自动剔除已不在最新表中的物料。
-* 🤖 **智能防错**：跳过大标题、自动调整列宽、**启用 Excel 原生日期格式（底层 YYYY/M/D，表面清爽显示 YYYY年M月D日）**。
+* 🤖 **智能防错**：跳过原始表大标题、自动列宽、**原生日期格式、自动生成顶部大标题**。
 """)
 
 # 1. 文件上传
@@ -93,7 +94,7 @@ if old_file and new_file:
                 df_merged = df_merged[final_columns]
                 df_merged['序号'] = range(1, len(df_merged) + 1)
                 
-                # --- 终极格式化：写入真实的底层 DateTime 对象 ---
+                # 写入真实的底层 DateTime 对象
                 if '入库时间' in df_merged.columns:
                     def to_real_excel_date(d):
                         if pd.isna(d) or str(d).strip() in ['', 'nan', 'None', 'NaT']:
@@ -103,7 +104,6 @@ if old_file and new_file:
                         d_str = d_str.replace('年', '-').replace('月', '-').replace('日', '').replace('/', '-')
                         d_str = d_str.rstrip('-')
                         
-                        # 如果只有年月，底层强制补齐 1号
                         if len(d_str.split('-')) == 2:
                             d_str += '-01'
                             
@@ -113,20 +113,41 @@ if old_file and new_file:
                             return str(d).strip()
                             
                     df_merged['入库时间'] = df_merged['入库时间'].apply(to_real_excel_date)
-                # ------------------------------------
 
                 st.success("✅ 数据整合成功！")
                 st.dataframe(df_merged.head(10))
 
-                # 8. 导出：注入 Excel 自定义时间皮肤 (单数不补0)
+                # --- 新增：智能提取年份和月份生成大标题 ---
+                year_match = re.search(r'(20\d{2})年', new_file.name)
+                year_str = year_match.group(1) if year_match else "2026" # 默认2026
+                
+                month_match = re.search(r'(\d+)月', new_file.name)
+                month_str = month_match.group(1) if month_match else "X" # 没找到月就用X
+                
+                report_title = f"天津液化{year_str}年{month_str}月ERP库存明细表"
+                # ------------------------------------------
+
+                # 8. 导出：注入 Excel 自定义时间皮肤，并添加大标题
                 output = io.BytesIO()
                 
-                # 🌟 核心修改点：把 mm 换成 m，dd 换成 d
                 with pd.ExcelWriter(output, engine='xlsxwriter', datetime_format='yyyy"年"m"月"d"日"') as writer:
-                    df_merged.to_excel(writer, index=False, sheet_name='整合后库存明细')
+                    # 🌟 核心修改：startrow=1，把数据表整体往下挪一行，留出第一行写标题
+                    df_merged.to_excel(writer, index=False, sheet_name='整合后库存明细', startrow=1)
                     
                     workbook  = writer.book
                     worksheet = writer.sheets['整合后库存明细']
+                    
+                    # 🌟 核心修改：设置大标题的字体样式（加粗、16号、水平垂直居中）
+                    title_format = workbook.add_format({
+                        'bold': True,
+                        'font_size': 16,
+                        'align': 'center',
+                        'valign': 'vcenter'
+                    })
+                    
+                    # 🌟 核心修改：合并第一行的所有列，写入大标题
+                    worksheet.merge_range(0, 0, 0, len(df_merged.columns) - 1, report_title, title_format)
+                    worksheet.set_row(0, 30) # 把第一行的高度设为30，显得大气一点
                     
                     # 自动调整列宽
                     for i, col in enumerate(df_merged.columns):
