@@ -5,61 +5,62 @@ import re
 
 st.set_page_config(page_title="ERP 库存月报自动化整合工具", layout="wide")
 
+# --- 注入 CSS 强行修改按钮文字 ---
+st.markdown("""
+    <style>
+    /* 定位到上传组件中的按钮文本 */
+    section[data-testid="stFileUploadDropzone"] button {
+        visibility: hidden;
+    }
+    section[data-testid="stFileUploadDropzone"] button:before {
+        content: "上传文件";
+        visibility: visible;
+        display: block;
+        background-color: #FF4B4B; /* 这里可以自定义颜色，默认是红 */
+        color: white;
+        padding: 8px 16px;
+        border-radius: 8px;
+    }
+    /* 隐藏底部的 "Browse files" 默认提示 */
+    section[data-testid="stFileUploadDropzone"] span {
+        display: none;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 # ================= 优化后的极简业务 UI =================
 st.title("📦 ERP 库存月报自动化整合工具")
 
-# 使用 info 提示框让指引更醒目、专业
 st.info("""
 **💡 操作指引：**
 1. **上传历史表**：上传上月库存表（用于提取原有的入库时间、存放位置、采购订单等辅助信息）。
 2. **上传最新表**：上传本月系统导出的最新库存表（系统将自动以该表为基准进行匹配与更新）。
 3. **一键生成**：点击“开始自动化整合”，即可下载格式统一、排版完成的最终报表。
 """)
-# =======================================================
 
 # 1. 文件上传区
 col1, col2 = st.columns(2)
 with col1:
+    # 注意：这里的 label 我们依然写中文，CSS 会处理按钮内的文字
     old_file = st.file_uploader("📂 第一步：上传【历史】库存表", type=['xlsx', 'xls', 'csv'])
 with col2:
     new_file = st.file_uploader("🆕 第二步：上传【最新】库存表", type=['xlsx', 'xls', 'csv'])
 
-# 辅助函数：读取文件并智能定位真实表头
-def load_data(file):
-    if file.name.endswith('.csv'):
-        try:
-            df = pd.read_csv(file, encoding='utf-8-sig')
-        except:
-            df = pd.read_csv(file, encoding='gbk')
-    else:
-        df = pd.read_excel(file)
-        
-    if '物料编码' not in df.columns and '物料' not in df.columns:
-        for i in range(min(5, len(df))):
-            row_values = [str(val).strip() for val in df.iloc[i].values]
-            if '物料编码' in row_values or '物料' in row_values:
-                df.columns = row_values
-                df = df.iloc[i+1:].reset_index(drop=True)
-                break
-                
-    df.columns = [str(col).strip() for col in df.columns]
-    return df
+# ... (后面的数据处理逻辑 df_old, df_new 等保持不变)
 
-# 主逻辑
 if old_file and new_file:
-    # 按钮增加了一点间距，并且文案更具行动力
     st.write("---")
     if st.button("🚀 开始自动化整合", type="primary", use_container_width=True):
+        # ... (之前确认无误的所有处理逻辑)
         with st.spinner("系统正在高速处理并排版数据，请稍候..."):
             try:
-                # 2. 读取数据
+                # 2. 读取数据 (这里沿用之前的逻辑)
                 df_old = load_data(old_file)
                 df_new = load_data(new_file)
 
                 # 3. 数据清洗
                 df_old = df_old.dropna(subset=['物料编码'])
                 df_old = df_old[df_old['物料编码'].astype(str).str.strip() != '合计']
-                
                 df_new = df_new.dropna(subset=['物料'])
                 
                 # 4. 统一字段名称
@@ -104,80 +105,58 @@ if old_file and new_file:
                     def to_real_excel_date(d):
                         if pd.isna(d) or str(d).strip() in ['', 'nan', 'None', 'NaT']:
                             return pd.NaT 
-                            
                         d_str = str(d).strip().split(' ')[0]
                         d_str = d_str.replace('年', '-').replace('月', '-').replace('日', '').replace('/', '-')
                         d_str = d_str.rstrip('-')
-                        
                         if len(d_str.split('-')) == 2:
                             d_str += '-01'
-                            
                         try:
                             return pd.to_datetime(d_str)
                         except:
                             return str(d).strip()
-                            
                     df_merged['入库时间'] = df_merged['入库时间'].apply(to_real_excel_date)
 
                 st.success("✅ 报表已生成！请点击下方按钮下载。")
-                
-                # 界面优化：预览表格前加上一个小标题
                 st.markdown("###### 👁️ 整合结果预览 (前10条)")
                 st.dataframe(df_merged.head(10))
 
-                # 智能提取年份和月份生成大标题
+                # 智能提取月份
                 year_match = re.search(r'(20\d{2})年', new_file.name)
                 year_str = year_match.group(1) if year_match else "2026"
-                
                 month_match = re.search(r'(\d+)月', new_file.name)
                 month_str = month_match.group(1) if month_match else "X"
-                
                 report_title = f"天津液化{year_str}年{month_str}月ERP库存明细表"
 
-                # 8. 导出：注入 Excel 自定义时间皮肤，并添加大标题
+                # 8. 导出
                 output = io.BytesIO()
-                
                 with pd.ExcelWriter(output, engine='xlsxwriter', datetime_format='yyyy"年"m"月"d"日"') as writer:
                     df_merged.to_excel(writer, index=False, sheet_name='整合后库存明细', startrow=1)
-                    
                     workbook  = writer.book
                     worksheet = writer.sheets['整合后库存明细']
-                    
-                    title_format = workbook.add_format({
-                        'bold': True,
-                        'font_size': 16,
-                        'align': 'center',
-                        'valign': 'vcenter'
-                    })
-                    
+                    title_format = workbook.add_format({'bold': True, 'font_size': 16, 'align': 'center', 'valign': 'vcenter'})
                     worksheet.merge_range(0, 0, 0, len(df_merged.columns) - 1, report_title, title_format)
                     worksheet.set_row(0, 30) 
-                    
                     for i, col in enumerate(df_merged.columns):
                         col_data = df_merged[col].astype(str).replace(['nan', 'None', 'NaT'], '')
                         max_len = max(col_data.map(len).max(), len(str(col)))
-                        
                         if col in ['物料描述', '备注']:
                             set_len = min(max_len * 1.5, 60)
                         elif col in ['物料编码', '批次', '入库时间']:
                             set_len = max(max_len + 4, 18)
                         else:
                             set_len = max_len + 4
-                            
                         worksheet.set_column(i, i, set_len)
                 
-                # 9. 提供下载
+                # 9. 下载
                 original_name = new_file.name.rsplit('.', 1)[0]
                 download_file_name = f"整合后_{original_name}.xlsx"
-                
-                st.write("---") # 加一条分割线让下载区域更独立
+                st.write("---")
                 st.download_button(
                     label=f"⬇️ 下载最终报表：{download_file_name}",
                     data=output.getvalue(),
                     file_name=download_file_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary" # 让下载按钮也变成醒目的主色调
+                    type="primary"
                 )
-
             except Exception as e:
-                st.error(f"处理过程中出错，请检查表格格式是否规范。系统提示: {str(e)}")
+                st.error(f"处理出错：{str(e)}")
