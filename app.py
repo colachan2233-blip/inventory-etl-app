@@ -108,10 +108,31 @@ if old_file and new_file:
                 # 8. 页面预览
                 st.dataframe(df_merged.head(10))
 
-                # 9. 提供下载 (动态生成文件名)
+                # 9. 提供下载 (动态生成文件名 + 自动调整列宽)
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     df_merged.to_excel(writer, index=False, sheet_name='整合后库存明细')
+
+                    # --- 新增列宽美化功能 ---
+                    workbook = writer.book
+                    worksheet = writer.sheets['整合后库存明细']
+
+                    # 遍历所有列，根据内容长度自动撑开列宽
+                    for i, col in enumerate(df_merged.columns):
+                        # 获取这一列里面最长的那串字符的长度
+                        max_len = max(df_merged[col].astype(str).map(len).max(), len(str(col)))
+
+                        # 针对不同类型的列给点额外空间，防止中文字符挤压
+                        if col in ['物料描述', '备注']:
+                            set_len = max_len * 2  # 描述类的通常很长，多给点空间
+                        elif col in ['入库时间', '物料编码', '批次']:
+                            set_len = 15  # 时间和编码保底给 15 的宽度，告别 ######
+                        else:
+                            set_len = max_len + 2
+
+                        # 设置列宽
+                        worksheet.set_column(i, i, set_len)
+                    # ------------------------
 
                 # 提取用户上传的新表名字（去掉后缀）
                 original_name = new_file.name.rsplit('.', 1)[0]
