@@ -26,7 +26,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 定义数据读取函数 (修复 NameError 的关键) ---
+# --- 2. 定义数据读取函数 ---
 def load_data(file):
     """
     智能读取函数：处理CSV/Excel，并自动寻找含有'物料编码'的真实表头行
@@ -155,11 +155,25 @@ if old_file and new_file:
                     worksheet.merge_range(0, 0, 0, len(df_merged.columns)-1, report_title, title_fmt)
                     worksheet.set_row(0, 30)
                     
-                    # 自动调整列宽
+                    # 自动调整列宽（修复 float has no len 报错逻辑）
                     for i, col in enumerate(df_merged.columns):
+                        # 核心修复点：确保 col_data 是字符串序列
                         col_data = df_merged[col].astype(str).replace(['nan', 'None', 'NaT'], '')
-                        max_len = max(col_data.map(len).max(), len(str(col)))
-                        set_len = min(max_len * 1.5, 60) if col in ['物料描述', '备注'] else max(max_len + 4, 15)
+                        
+                        if not col_data.empty:
+                            content_max_len = col_data.map(len).max()
+                        else:
+                            content_max_len = 0
+                            
+                        max_len = max(content_max_len, len(str(col)))
+                        
+                        if col in ['物料描述', '备注']:
+                            set_len = min(max_len * 1.5, 60)
+                        elif col in ['物料编码', '批次', '入库时间']:
+                            set_len = max(max_len + 4, 18)
+                        else:
+                            set_len = max_len + 4
+                            
                         worksheet.set_column(i, i, set_len)
 
                 st.download_button(
