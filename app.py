@@ -28,9 +28,6 @@ st.markdown("""
 
 # --- 2. 定义数据读取函数 ---
 def load_data(file):
-    """
-    智能读取函数：处理CSV/Excel，并自动寻找含有'物料编码'的真实表头行
-    """
     if file.name.endswith('.csv'):
         try:
             df = pd.read_csv(file, encoding='utf-8-sig')
@@ -38,8 +35,7 @@ def load_data(file):
             df = pd.read_csv(file, encoding='gbk')
     else:
         df = pd.read_excel(file)
-        
-    # 如果第一行不是表头，向下找5行寻找包含'物料编码'或'物料'的行
+    
     if '物料编码' not in df.columns and '物料' not in df.columns:
         for i in range(min(5, len(df))):
             row_values = [str(val).strip() for val in df.iloc[i].values]
@@ -48,12 +44,11 @@ def load_data(file):
                 df = df.iloc[i+1:].reset_index(drop=True)
                 break
                 
-    # 清理列名空格
     df.columns = [str(col).strip() for col in df.columns]
     return df
 
 # --- 3. 业务 UI 界面 ---
-st.title("📦 ERP 库存月报自动化整合工具")
+st.title("📦 ERP 库存月报自动化整合工具 V1.1") # 增加了版本号便于确认更新
 
 st.info("""
 **💡 操作指引：**
@@ -68,22 +63,18 @@ with col1:
 with col2:
     new_file = st.file_uploader("🆕 第二步：上传【最新】库存表", type=['xlsx', 'xls', 'csv'])
 
-# --- 4. 主处理逻辑 ---
 if old_file and new_file:
     st.write("---")
     if st.button("🚀 开始自动化整合", type="primary", use_container_width=True):
-        with st.spinner("系统正在处理数据并排版，请稍候..."):
+        with st.spinner("系统正在处理数据并排版..."):
             try:
-                # 调用定义的函数
                 df_old = load_data(old_file)
                 df_new = load_data(new_file)
 
-                # 数据清洗
                 df_old = df_old.dropna(subset=['物料编码'])
                 df_old = df_old[df_old['物料编码'].astype(str).str.strip() != '合计']
                 df_new = df_new.dropna(subset=['物料'])
                 
-                # 统一字段名
                 new_rename_dict = {
                     '物料': '物料编码',
                     '库存地点': '地点',
@@ -93,22 +84,18 @@ if old_file and new_file:
                 }
                 df_new = df_new.rename(columns=new_rename_dict)
 
-                # 格式化 ID 防止匹配失败
                 for df_tmp in [df_new, df_old]:
                     col_target = '物料编码' if '物料编码' in df_tmp.columns else '物料'
                     df_tmp[col_target] = df_tmp[col_target].fillna('').astype(str).str.replace(r'\.0$', '', regex=True).replace('nan', '').str.strip()
                     if '批次' in df_tmp.columns:
                         df_tmp['批次'] = df_tmp['批次'].fillna('').astype(str).replace('nan', '').str.strip()
 
-                # 提取历史背景信息
                 history_cols = ['物料编码', '批次', '采购订单', '入库时间', '供应商', '存放位置', '备注']
                 history_cols = [c for c in history_cols if c in df_old.columns]
                 df_old_history = df_old[history_cols].drop_duplicates(subset=['物料编码', '批次'], keep='first')
 
-                # 合并数据
                 df_merged = pd.merge(df_new, df_old_history, on=['物料编码', '批次'], how='left')
 
-                # 整理最终字段顺序
                 final_columns = [
                     '序号', '工厂', '地点', '物料编码', '物料描述', '单位', '数量', 
                     '库存金额', '批次', '采购订单', '入库时间', '供应商', '存放位置', '备注'
@@ -119,7 +106,6 @@ if old_file and new_file:
                 df_merged = df_merged[final_columns]
                 df_merged['序号'] = range(1, len(df_merged) + 1)
                 
-                # 处理日期为原生对象
                 if '入库时间' in df_merged.columns:
                     def to_datetime_obj(d):
                         if pd.isna(d) or str(d).strip() in ['', 'nan', 'None', 'NaT']:
@@ -132,7 +118,6 @@ if old_file and new_file:
                         except: return str(d).strip()
                     df_merged['入库时间'] = df_merged['入库时间'].apply(to_datetime_obj)
 
-                # 动态生成大标题
                 year_match = re.search(r'(20\d{2})', new_file.name)
                 year_str = year_match.group(1) if year_match else "2026"
                 month_match = re.search(r'(\d+)月', new_file.name)
@@ -140,48 +125,53 @@ if old_file and new_file:
                 report_title = f"天津液化{year_str}年{month_str}月ERP库存明细表"
 
                 st.success("✅ 整合完成！")
-                st.markdown("###### 预览结果")
                 st.dataframe(df_merged.head(10))
 
-                # 导出 Excel
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter', datetime_format='yyyy"年"m"月"d"日"') as writer:
                     df_merged.to_excel(writer, index=False, sheet_name='库存明细', startrow=1)
                     workbook  = writer.book
                     worksheet = writer.sheets['库存明细']
-                    
-                    # 写入大标题
                     title_fmt = workbook.add_format({'bold':True, 'font_size':16, 'align':'center', 'valign':'vcenter'})
                     worksheet.merge_range(0, 0, 0, len(df_merged.columns)-1, report_title, title_fmt)
                     worksheet.set_row(0, 30)
                     
-                    # 自动调整列宽（修复 float has no len 报错逻辑）
+                    # --- 终极加固：计算列宽 ---
                     for i, col in enumerate(df_merged.columns):
-                        # 核心修复点：确保 col_data 是字符串序列
-                        col_data = df_merged[col].astype(str).replace(['nan', 'None', 'NaT'], '')
+                        # 1. 强制将该列所有元素转为字符串（包括 NaN）
+                        # 2. 用 lambda 确保 len() 只作用于字符串对象
+                        # 3. 过滤掉无意义的 'nan', 'None', 'NaT' 后再算长度
+                        s_list = df_merged[col].astype(str).replace(['nan', 'None', 'NaT', '<NA>'], '')
                         
-                        if not col_data.empty:
-                            content_max_len = col_data.map(len).max()
+                        # 找出内容的最长长度（如果没有内容则为 0）
+                        if len(s_list) > 0:
+                            # 关键修复点：使用 lambda 兜底转换
+                            max_content_len = s_list.apply(lambda x: len(str(x))).max()
                         else:
-                            content_max_len = 0
-                            
-                        max_len = max(content_max_len, len(str(col)))
+                            max_content_len = 0
                         
+                        # 比较标题长度
+                        max_tick_len = max(max_content_len, len(str(col)))
+                        
+                        # 设置不同字段的宽度权重
                         if col in ['物料描述', '备注']:
-                            set_len = min(max_len * 1.5, 60)
+                            width = min(max_tick_len * 1.5, 60)
                         elif col in ['物料编码', '批次', '入库时间']:
-                            set_len = max(max_len + 4, 18)
+                            width = max(max_tick_len + 4, 18)
                         else:
-                            set_len = max_len + 4
+                            width = max_tick_len + 4
                             
-                        worksheet.set_column(i, i, set_len)
+                        worksheet.set_column(i, i, width)
 
                 st.download_button(
-                    label=f"⬇️ 下载整合报表：整合后_{new_file.name}",
+                    label=f"⬇️ 下载整合报表",
                     data=output.getvalue(),
                     file_name=f"整合后_{new_file.name}",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary"
                 )
             except Exception as e:
+                # 即使报错也把具体的报错行显示出来，方便定位
+                import traceback
                 st.error(f"处理过程中出现错误：{e}")
+                st.code(traceback.format_exc())
